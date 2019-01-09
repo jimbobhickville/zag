@@ -59,6 +59,8 @@ class Selector(object):
                 return self._browse_atoms_for_execute(atom=atom)
             else:
                 return iter([])
+        elif state == st.IGNORE and intention == st.IGNORE:
+            return self._browse_atoms_for_execute(atom=atom)
         elif state == st.REVERTED:
             return self._browse_atoms_for_revert(atom=atom)
         elif state == st.FAILURE:

@@ -1188,6 +1188,63 @@ class RetryTest(utils.EngineTestBase):
         self.assertItemsEqual(expected, capturer.values[4:])
         self.assertEqual(st.SUCCESS, engine.storage.get_flow_state())
 
+    def test_abort(self):
+        retry1 = retry.AlwaysAbort('r1')
+        flow = lf.Flow('flow-1').add(
+            utils.ProgressingTask('task-1'),
+            lf.Flow('flow-2', retry1).add(
+                utils.FailingTask('task-2'),
+                utils.ProgressingTask('task-3'),
+            ),
+            utils.ProgressingTask('task-4'),
+        )
+        engine = self._make_engine(flow)
+        with utils.CaptureListener(engine) as capturer:
+            engine.run()
+        expected = ['flow-1.f RUNNING',
+                    'task-1.t RUNNING',
+                    'task-1.t SUCCESS(5)',
+                    'r1.r RUNNING',
+                    'r1.r SUCCESS(None)',
+                    'task-2.t RUNNING',
+                    'task-2.t FAILURE(Failure: RuntimeError: Woot!)',
+                    'r1.r IGNORE',
+                    'task-2.t IGNORE',
+                    'task-3.t IGNORE',
+                    'task-4.t IGNORE',
+                    'flow-1.f SUCCESS']
+
+        self.assertEqual(expected, capturer.values)
+
+    def test_ignore(self):
+        retry1 = retry.AlwaysIgnore('r1')
+        flow = lf.Flow('flow-1').add(
+            utils.ProgressingTask('task-1'),
+            lf.Flow('flow-2', retry1).add(
+                utils.FailingTask('task-2'),
+                utils.ProgressingTask('task-3'),
+            ),
+            utils.ProgressingTask('task-4'),
+        )
+        engine = self._make_engine(flow)
+        with utils.CaptureListener(engine) as capturer:
+            engine.run()
+        expected = ['flow-1.f RUNNING',
+                    'task-1.t RUNNING',
+                    'task-1.t SUCCESS(5)',
+                    'r1.r RUNNING',
+                    'r1.r SUCCESS(None)',
+                    'task-2.t RUNNING',
+                    'task-2.t FAILURE(Failure: RuntimeError: Woot!)',
+                    'r1.r IGNORE',
+                    'task-2.t IGNORE',
+                    'task-3.t IGNORE',
+                    'task-4.t RUNNING',
+                    'task-4.t SUCCESS(5)',
+                    'flow-1.f SUCCESS']
+
+        self.assertEqual(expected, capturer.values)
+
 
 class RetryParallelExecutionTest(utils.EngineTestBase):
     # FIXME(harlowja): fix this class so that it doesn't use events or uses

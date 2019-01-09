@@ -54,13 +54,35 @@ class Decision(misc.StrEnum):
     retry strategy associated with it.
     """
 
-    #: Retries the surrounding/associated subflow again.
     RETRY = "RETRY"
+    """Retries the surrounding/associated subflow.
+
+    This strategy will revert tasks within the associated subflow, then
+    re-run all the tasks again.
+    """
+
+    ABORT = "ABORT"
+    """Ends the entire flow immediately without reverting anything.
+
+    This strategy will just end the flow without marking anything as failed.
+    If you want a task to be able to short-circuit a flow without triggering
+    any error handling, this is what you want.
+    """
+
+    IGNORE = "IGNORE"
+    """Ends the subflow immediately and continues on to the remaining flow.
+
+    This strategy will abandon the associated subflow but continue processing
+    the outer flow as if the subflow had succeeded.
+    """
+
 
 # Retain these aliases for a number of releases...
 REVERT = Decision.REVERT
 REVERT_ALL = Decision.REVERT_ALL
 RETRY = Decision.RETRY
+ABORT = Decision.ABORT
+IGNORE = Decision.IGNORE
 
 # Constants passed into revert/execute kwargs.
 #
@@ -379,3 +401,23 @@ class ParameterizedForEach(ForEachBase):
 
     def execute(self, values, history, *args, **kwargs):
         return self._get_next_value(values, history)
+
+
+class AlwaysAbort(Retry):
+    """Retry that always aborts entire flow."""
+
+    def on_failure(self, *args, **kwargs):
+        return ABORT
+
+    def execute(self, *args, **kwargs):
+        pass
+
+
+class AlwaysIgnore(Retry):
+    """Retry that always ignores subflow."""
+
+    def on_failure(self, *args, **kwargs):
+        return IGNORE
+
+    def execute(self, *args, **kwargs):
+        pass

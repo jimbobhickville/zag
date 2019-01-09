@@ -15,6 +15,7 @@
 #    under the License.
 
 import abc
+import itertools
 import weakref
 
 from oslo_utils import reflection
@@ -23,6 +24,7 @@ import six
 
 from zag.engines.action_engine import compiler as co
 from zag.engines.action_engine import executor as ex
+from zag.engines.action_engine import traversal as tr
 from zag import logging
 from zag import retry as retry_atom
 from zag import states as st
@@ -36,8 +38,9 @@ class Strategy(object):
 
     strategy = None
 
-    def __init__(self, runtime):
+    def __init__(self, runtime, atom=None):
         self._runtime = runtime
+        self._atom = atom
 
     @abc.abstractmethod
     def apply(self):
@@ -57,14 +60,10 @@ class RevertAndRetry(Strategy):
 
     strategy = retry_atom.RETRY
 
-    def __init__(self, runtime, retry):
-        super(RevertAndRetry, self).__init__(runtime)
-        self._retry = retry
-
     def apply(self):
-        tweaked = self._runtime.reset_atoms([self._retry], state=None,
+        tweaked = self._runtime.reset_atoms([self._atom], state=None,
                                             intention=st.RETRY)
-        tweaked.extend(self._runtime.reset_subgraph(self._retry, state=None,
+        tweaked.extend(self._runtime.reset_subgraph(self._atom, state=None,
                                                     intention=st.REVERT))
         return tweaked
 
@@ -73,9 +72,6 @@ class RevertAll(Strategy):
     """Sets *all* nodes/atoms to the ``REVERT`` intention."""
 
     strategy = retry_atom.REVERT_ALL
-
-    def __init__(self, runtime):
-        super(RevertAll, self).__init__(runtime)
 
     def apply(self):
         return self._runtime.reset_atoms(
@@ -88,16 +84,52 @@ class Revert(Strategy):
 
     strategy = retry_atom.REVERT
 
-    def __init__(self, runtime, atom):
-        super(Revert, self).__init__(runtime)
-        self._atom = atom
-
     def apply(self):
         tweaked = self._runtime.reset_atoms([self._atom], state=None,
                                             intention=st.REVERT)
         tweaked.extend(self._runtime.reset_subgraph(self._atom, state=None,
                                                     intention=st.REVERT))
         return tweaked
+
+
+class Abort(Strategy):
+    """Sets atom and any unfinished nodes to the ``IGNORE`` intention."""
+
+    strategy = retry_atom.ABORT
+
+    def apply(self):
+        execution_graph = self._runtime.compilation.execution_graph
+        successors_iter = tr.depth_first_iterate(
+            execution_graph,
+            self._atom,
+            tr.Direction.FORWARD
+        )
+        return self._runtime.reset_atoms(
+            itertools.chain([self._atom], successors_iter),
+            state=st.IGNORE,
+            intention=st.IGNORE,
+        )
+
+
+class Ignore(Strategy):
+    """Sets atom and *associated* nodes to the ``IGNORE`` intention."""
+
+    strategy = retry_atom.IGNORE
+
+    def apply(self):
+        execution_graph = self._runtime.compilation.execution_graph
+        successors_iter = tr.depth_first_iterate(
+            execution_graph,
+            self._atom,
+            tr.Direction.FORWARD,
+            through_flows=False,
+            through_retries=False,
+        )
+        return self._runtime.reset_atoms(
+            itertools.chain([self._atom], successors_iter),
+            state=st.IGNORE,
+            intention=st.IGNORE,
+        )
 
 
 class Completer(object):
@@ -176,9 +208,7 @@ class Completer(object):
             # Ask retry controller what to do in case of failure.
             handler = self._runtime.fetch_action(retry)
             strategy = handler.on_failure(retry, atom, failure)
-            if strategy == retry_atom.RETRY:
-                return RevertAndRetry(self._runtime, retry)
-            elif strategy == retry_atom.REVERT:
+            if strategy == retry_atom.REVERT:
                 # Ask parent retry and figure out what to do...
                 parent_resolver = self._determine_resolution(retry, failure)
                 # In the future, this will be the only behavior. REVERT
@@ -192,9 +222,16 @@ class Completer(object):
                 if parent_resolver is not self._undefined_resolver:
                     if parent_resolver.strategy != retry_atom.REVERT:
                         return parent_resolver
-                return Revert(self._runtime, retry)
-            elif strategy == retry_atom.REVERT_ALL:
-                return RevertAll(self._runtime)
+
+            # find the strategy subclass that matches the strategy and use it
+            strategy_cls = None
+            for subclass in Strategy.__subclasses__():
+                if subclass.strategy == strategy:
+                    strategy_cls = subclass
+                    break
+
+            if strategy_cls:
+                return strategy_cls(self._runtime, retry)
             else:
                 raise ValueError("Unknown atom failure resolution"
                                  " action/strategy '%s'" % strategy)
