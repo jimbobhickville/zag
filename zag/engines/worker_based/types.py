@@ -20,6 +20,7 @@ import random
 import threading
 
 from futurist import periodics
+from kazoo import exceptions as kazoo_exceptions
 from oslo_utils import reflection
 from oslo_utils import timeutils
 import six
@@ -455,6 +456,15 @@ class ToozWorkerAdvertiser(object):
             self._coordinator.heartbeat()
         except tooz.NotImplemented:
             pass
+        except tooz.ToozError as exc:
+            if (hasattr(exc, '__cause__')
+                    and isinstance(exc.__cause__,
+                                   kazoo_exceptions.SessionExpiredError)):
+                self._coordinator.stop()
+                self._coordinator.start()
+                self._coordinator.heartbeat()
+            else:
+                raise exc
 
     def start(self):
         self._activator.start()
@@ -759,3 +769,12 @@ class ToozWorkerFinder(WorkerFinder):
             self._coordinator.heartbeat()
         except tooz.NotImplemented:
             pass
+        except tooz.ToozError as exc:
+            if (hasattr(exc, '__cause__')
+                    and isinstance(exc.__cause__,
+                                   kazoo_exceptions.SessionExpiredError)):
+                self._coordinator.stop()
+                self._coordinator.start()
+                self._coordinator.heartbeat()
+            else:
+                raise exc
